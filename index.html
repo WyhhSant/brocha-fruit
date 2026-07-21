@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blox Fruits - Pixel Adventure</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        canvas { display: block; border: 2px solid #333; }
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 14px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 5;
+        }
+        #inventory {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 8px;
+            z-index: 5;
+        }
+        .slot {
+            width: 50px;
+            height: 50px;
+            background: #333;
+            border: 2px solid #555;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            cursor: pointer;
+            color: white;
+        }
+        .slot:hover { border-color: #ffd700; }
+        .slot.active { border-color: #ffd700; box-shadow: 0 0 10px #ffd700; }
+        #shop {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            display: none;
+            z-index: 10;
+            text-align: center;
+        }
+        #shop button {
+            margin: 5px;
+            padding: 10px 20px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #shop button:hover { background: #c0392b; }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="hud">
+        <div>❤️ Vida: <span id="hpDisplay">100</span>/100</div>
+        <div>⭐ Nível: <span id="levelDisplay">1</span></div>
+        <div>✨ XP: <span id="xpDisplay">0</span>/50</div>
+        <div>💰 Belly: <span id="bellyDisplay">0</span></div>
+        <div>🍎 Fruta: <span id="fruitDisplay">Nenhuma</span></div>
+        <div>🎯 Quest: <span id="questDisplay">Derrote 5 inimigos (0/5)</span></div>
+    </div>
+    <div id="inventory">
+        <div class="slot active" id="slot1" title="Soco (Clique esquerdo)">👊</div>
+        <div class="slot" id="slot2" title="Espada (Tecla 1)">⚔️</div>
+        <div class="slot" id="slot3" title="Fruta (Tecla 2)">🍎</div>
+    </div>
+    <div id="shop">
+        <h3>🏪 Loja de Frutas</h3>
+        <button onclick="buyFruit('macia')">🍎 Macia - 500 Belly</button>
+        <button onclick="buyFruit('fogo')">🔥 Fogo - 1500 Belly</button>
+        <button onclick="buyFruit('gelo')">❄️ Gelo - 2000 Belly</button>
+        <button onclick="buyFruit('trovao')">⚡ Trovão - 3000 Belly</button>
+        <button onclick="closeShop()">Fechar</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const W = 1200, H = 700;
+        canvas.width = W;
+        canvas.height = H;
+
+        // ========== JOGADOR ==========
+        const player = {
+            x: 600, y: 400,
+            vx: 0, vy: 0,
+            w: 30, h: 40,
+            hp: 100, maxHp: 100,
+            level: 1, xp: 0, xpToNext: 50,
+            belly: 0,
+            fruit: null,
+            sword: false,
+            attackCooldown: 0,
+            fruitCooldown: 0,
+            facing: 1,
+            quest: { type: 'kill', target: 5, progress: 0 },
+            attackRange: 50,
+            damage: 10
+        };
+
+        // ========== MUNDO ==========
+        const camera = { x: 0, y: 0 };
+        const worldW = 3000, worldH = 2000;
+        
+        // Obstáculos (ilhas, árvores, pedras)
+        const obstacles = [];
+        for (let i = 0; i < 30; i++) {
+            obstacles.push({
+                x: Math.random() * worldW,
+                y: Math.random() * worldH,
+                w: 40 + Math.random() * 60,
+                h: 40 + Math.random() * 60,
+                color: ['#2ecc71','#27ae60','#1abc9c'][Math.floor(Math.random()*3)]
+            });
+        }
+
+        // ========== INIMIGOS ==========
+        const enemies = [];
+        function spawnEnemy() {
+            if (enemies.length >= 8) return;
+            const types = [
+                { name: 'Pirata', hp: 30, damage: 8, xp: 15, belly: 20, color: '#e74c3c' },
+                { name: 'Marinho', hp: 50, damage: 12, xp: 25, belly: 35, color: '#3498db' },
+                { name: 'Bandido', hp: 70, damage: 15, xp: 40, belly: 50, color: '#f39c12' },
+                { name: 'Chefe', hp: 120, damage: 20, xp: 80, belly: 100, color: '#8e44ad' }
+            ];
+            const type = types[Math.floor(Math.random() * types.length)];
+            enemies.push({
+                x: player.x + (Math.random() - 0.5) * 600,
+                y: player.y + (Math.random() - 0.5) * 400,
+                w: 28, h: 36,
+                ...type,
+                maxHp: type.hp,
+                alive: true,
+                aiTimer: 0
+            });
+        }
+
+        // ========== ITENS NO CHÃO ==========
+        const groundItems = [];
+        function dropItem(x, y) {
+            if (Math.random() < 0.4) {
+                groundItems.push({ x, y, type: 'belly', amount: 10 + Math.floor(Math.random() * 30) });
+            }
+            if (Math.random() < 0.1) {
+                groundItems.push({ x, y, type: 'fruit', fruit: ['macia','fogo','gelo','trovao'][Math.floor(Math.random()*4)] });
+            }
+        }
+
+        // ========== INPUT ==========
+        const keys = {};
+        let mouseDown = false;
+        const inventory = { selected: 0 };
+
+        window.addEventListener('keydown', e => {
+            keys[e.key] = true;
+            if (e.key === '1') inventory.selected = 0;
+            if (e.key === '2') inventory.selected = 1;
+            if (e.key === '3') inventory.selected = 2;
+            if (e.key === 'e') openShop();
+            if (e.key === ' ') e.preventDefault();
+        });
+        window.addEventListener('keyup', e => { keys[e.key] = false; });
+        canvas.addEventListener('mousedown', e => {
+            mouseDown = true;
+            attack();
+        });
+        canvas.addEventListener('mouseup', () => { mouseDown = false; });
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            player.facing = mx > W/2 ? 1 : -1;
+        });
+
+        function attack() {
+            if (player.attackCooldown > 0) return;
+            
+            const range = player.sword ? 70 : 50;
+            const damage = player.sword ? player.damage * 2 : player.damage;
+            
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                const dx = player.x + player.facing * 20 - enemy.x;
+                const dy = player.y - enemy.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < range + 30) {
+                    enemy.hp -= damage;
+                    player.attackCooldown = player.sword ? 20 : 30;
+                    
+                    if (enemy.hp <= 0) {
+                        enemy.alive = false;
+                        player.xp += enemy.xp;
+                        player.belly += enemy.belly;
+                        player.quest.progress++;
+                        dropItem(enemy.x, enemy.y);
+                        checkLevelUp();
+                    }
+                }
+            });
+
+            // Sem espada e sem fruta, soco básico
+            if (!player.sword && !player.fruit) {
+                player.attackCooldown = 30;
+            }
+        }
+
+        function useFruitPower() {
+            if (!player.fruit || player.fruitCooldown > 0) return;
+            player.fruitCooldown = 120;
+            
+            const range = 100;
+            const damage = player.damage * 1.5;
+            
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                const dx = player.x - enemy.x;
+                const dy = player.y - enemy.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < range) {
+                    enemy.hp -= damage;
+                    if (enemy.hp <= 0) {
+                        enemy.alive = false;
+                        player.xp += enemy.xp;
+                        player.belly += enemy.belly;
+                        player.quest.progress++;
+                        dropItem(enemy.x, enemy.y);
+                        checkLevelUp();
+                    }
+                }
+            });
+        }
+
+        function checkLevelUp() {
+            while (player.xp >= player.xpToNext) {
+                player.xp -= player.xpToNext;
+                player.level++;
+                player.xpToNext = Math.floor(player.xpToNext * 1.5);
+                player.maxHp += 20;
+                player.hp = player.maxHp;
+                player.damage += 5;
+                
+                if (player.quest.progress >= player.quest.target) {
+                    player.belly += 100;
+                    player.xp += 30;
+                    player.quest.progress = 0;
+                    player.quest.target += 5;
+                }
+            }
+        }
+
+        function buyFruit(type) {
+            const prices = { macia: 500, fogo: 1500, gelo: 2000, trovao: 3000 };
+            if (player.belly >= prices[type]) {
+                player.belly -= prices[type];
+                player.fruit = type;
+                closeShop();
+            } else {
+                alert('Belly insuficiente!');
+            }
+        }
+
+        function openShop() { document.getElementById('shop').style.display = 'block'; }
+        function closeShop() { document.getElementById('shop').style.display = 'none'; }
+
+        // ========== UPDATE ==========
+        function update() {
+            // Movimento
+            player.vx = 0; player.vy = 0;
+            if (keys['w'] || keys['ArrowUp']) player.vy = -3;
+            if (keys['s'] || keys['ArrowDown']) player.vy = 3;
+            if (keys['a'] || keys['ArrowLeft']) { player.vx = -3; player.facing = -1; }
+            if (keys['d'] || keys['ArrowRight']) { player.vx = 3; player.facing = 1; }
+            
+            if (player.vx !== 0 && player.vy !== 0) {
+                player.vx *= 0.7;
+                player.vy *= 0.7;
+            }
+
+            player.x += player.vx;
+            player.y += player.vy;
+            if (player.attackCooldown > 0) player.attackCooldown--;
+            if (player.fruitCooldown > 0) player.fruitCooldown--;
+
+            // Clique contínuo
+            if (mouseDown && inventory.selected === 0) attack();
+            if (inventory.selected === 2 && keys[' ']) useFruitPower();
+
+            // Limites do mundo
+            player.x = Math.max(20, Math.min(worldW - 20, player.x));
+            player.y = Math.max(20, Math.min(worldH - 20, player.y));
+
+            // Câmera
+            camera.x = player.x - W/2;
+            camera.y = player.y - H/2;
+
+            // Spawn de inimigos
+            if (Math.random() < 0.02) spawnEnemy();
+
+            // Inimigos IA
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                enemy.aiTimer--;
+                if (enemy.aiTimer <= 0) {
+                    enemy.aiTimer = 60;
+                    const dx = player.x - enemy.x;
+                    const dy = player.y - enemy.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if (dist < 300) {
+                        enemy.x += (dx / dist) * 1.5;
+                        enemy.y += (dy / dist) * 1.5;
+                    } else {
+                        enemy.x += (Math.random() - 0.5) * 2;
+                        enemy.y += (Math.random() - 0.5) * 2;
+                    }
+                }
+                
+                // Dano ao jogador
+                const dx = player.x - enemy.x;
+                const dy = player.y - enemy.y;
+                if (Math.abs(dx) < 40 && Math.abs(dy) < 40) {
+                    if (Math.random() < 0.05) {
+                        player.hp -= enemy.damage;
+                        if (player.hp <= 0) {
+                            player.hp = player.maxHp;
+                            player.x = 600;
+                            player.y = 400;
+                            player.belly = Math.floor(player.belly * 0.5);
+                        }
+                    }
+                }
+            });
+
+            // Coleta de itens
+            groundItems.forEach((item, i) => {
+                const dx = player.x - item.x;
+                const dy = player.y - item.y;
+                if (Math.abs(dx) < 30 && Math.abs(dy) < 30) {
+                    if (item.type === 'belly') player.belly += item.amount;
+                    if (item.type === 'fruit') player.fruit = item.fruit;
+                    groundItems.splice(i, 1);
+                }
+            });
+
+            // Limpeza
+            for (let i = enemies.length-1; i >= 0; i--) {
+                if (!enemies[i].alive) enemies.splice(i, 1);
+            }
+            for (let i = groundItems.length-1; i >= 0; i--) {
+                if (Math.abs(groundItems[i].x - player.x) > 800 || Math.abs(groundItems[i].y - player.y) > 600) {
+                    groundItems.splice(i, 1);
+                }
+            }
+
+            updateHUD();
+        }
+
+        function updateHUD() {
+            document.getElementById('hpDisplay').textContent = player.hp;
+            document.getElementById('levelDisplay').textContent = player.level;
+            document.getElementById('xpDisplay').textContent = player.xp;
+            document.getElementById('bellyDisplay').textContent = player.belly;
+            document.getElementById('fruitDisplay').textContent = player.fruit || 'Nenhuma';
+            document.getElementById('questDisplay').textContent = `Derrote ${player.quest.target} inimigos (${player.quest.progress}/${player.quest.target})`;
+            
+            document.querySelectorAll('.slot').forEach((s, i) => s.classList.toggle('active', i === inventory.selected));
+        }
+
+        // ========== RENDER ==========
+        function draw() {
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, W, H);
+
+            ctx.save();
+            ctx.translate(-camera.x, -camera.y);
+
+            // Chão
+            ctx.fillStyle = '#7ec850';
+            ctx.fillRect(0, 0, worldW, worldH);
+
+            // Obstáculos
+            obstacles.forEach(obs => {
+                ctx.fillStyle = obs.color;
+                ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+                ctx.strokeStyle = '#2d3436';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+            });
+
+            // Itens no chão
+            groundItems.forEach(item => {
+                if (item.type === 'belly') {
+                    ctx.fillStyle = '#ffd700';
+                    ctx.beginPath();
+                    ctx.arc(item.x, item.y, 8, 0, Math.PI*2);
+                    ctx.fill();
+                } else {
+                    const colors = { macia: '#ff7675', fogo: '#e17055', gelo: '#74b9ff', trovao: '#fdcb6e' };
+                    ctx.fillStyle = colors[item.fruit] || '#fff';
+                    ctx.beginPath();
+                    ctx.arc(item.x, item.y, 10, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            });
+
+            // Inimigos
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                ctx.fillStyle = enemy.color;
+                ctx.fillRect(enemy.x - 14, enemy.y - 18, 28, 36);
+                ctx.fillStyle = '#ffeaa7';
+                ctx.beginPath();
+                ctx.arc(enemy.x, enemy.y - 22, 10, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(enemy.x - 3, enemy.y - 24, 2, 0, Math.PI*2);
+                ctx.arc(enemy.x + 3, enemy.y - 24, 2, 0, Math.PI*2);
+                ctx.fill();
+                // Barra de vida
+                ctx.fillStyle = '#e74c3c';
+                ctx.fillRect(enemy.x - 15, enemy.y - 30, 30, 4);
+                ctx.fillStyle = '#2ecc71';
+                ctx.fillRect(enemy.x - 15, enemy.y - 30, 30 * (enemy.hp / enemy.maxHp), 4);
+            });
+
+            // Jogador
+            ctx.fillStyle = '#3498db';
+            ctx.fillRect(player.x - 15, player.y - 20, 30, 40);
+            ctx.fillStyle = '#ffeaa7';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y - 24, 12, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(player.x + player.facing * 5, player.y - 27, 2.5, 0, Math.PI*2);
+            ctx.fill();
+            
+            if (player.sword) {
+                ctx.fillStyle = '#dfe6e9';
+                ctx.fillRect(player.x + player.facing * 15, player.y - 15, 25, 4);
+            }
+
+            ctx.restore();
+
+            // Barra de vida do jogador
+            ctx.fillStyle = '#c0392b';
+            ctx.fillRect(10, 10, 200, 15);
+            ctx.fillStyle = '#2ecc71';
+            ctx.fillRect(10, 10, 200 * (player.hp / player.maxHp), 15);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(10, 10, 200, 15);
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        updateHUD();
+        gameLoop();
+    </script>
+</body>
+</html>
